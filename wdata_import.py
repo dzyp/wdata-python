@@ -4,17 +4,19 @@ import httplib
 import json
 import mimetypes
 import sys
+import time
 import urllib
 from urllib2 import HTTPError, Request, urlopen
 
 
-AUTH_PATH = 'https://wk-dev.wdesk.org/iam/oauth2/v4.0/token'
+AUTH_PATH = 'https://app.wdesk.com/iam/oauth2/v4.0/token'
 
 PROTOCOL = 'https://'
-WDATA_HOST = 'h.wk-dev.wdesk.org'
+WDATA_HOST = 'h.app.wdesk.com'
 WDATA_API_PREFIX = '/s/wdata/prep/api/v1/'
 
 FILE_IMPORT_PATH = PROTOCOL + WDATA_HOST + WDATA_API_PREFIX + 'table/%s/import'
+FILE_POLL_PATH = PROTOCOL + WDATA_HOST + WDATA_API_PREFIX + 'file/%s'
 
 
 class Args(collections.namedtuple('Args', ['table_id', 'client_id', 'client_secret', 'file_path'])):
@@ -37,9 +39,16 @@ def main(args):
     :param Args args: user-provided arguments to the cli to upload a file
     """
     auth = _login(args.client_id, args.client_secret)
-    file_id = _upload_file(auth, args.table_id, args.file_path)
-    _import_file(auth, args.table_id, file_id)
+    print 'user authorized'
 
+    file_id = _upload_file(auth, args.table_id, args.file_path)
+    print 'file uploaded'
+
+    _import_file(auth, args.table_id, file_id)
+    print 'file import started'
+
+    _block_on_import(auth, file_id)
+    print 'file successfully imported'
 
 
 def _make_request(request):
@@ -89,7 +98,11 @@ def _upload_file(auth, table_id, path):
     :return: the id of the file uploaded
     :rtype: str
     """
-    f = open(path)
+    try:
+        f = open(path)
+    except IOError as e:
+        print 'unable to open file %s: %s' % (path, str(e))
+        sys.exit(1)
 
     content_type, body = encode_multipart_formdata(
         [('tableId', table_id)],
@@ -123,18 +136,37 @@ def _import_file(auth, table_id, file_id):
     req.add_header('Authorization', auth.bearer_token())
     req.add_data(json.dumps({'fileId': file_id}))
 
-    f = json.loads(_make_request(req), object_hook=lambda b: File(b['body']['id'], b['body']['status']))
-    print f
+    _make_request(req)
 
 
-def _parse_args():
-    parser = argparse.ArgumentParser(description='Upload a file to Wdata.')
-    parser.add_argument('table_id', help='id of the table to upload a file to')
-    parser.add_argument('client_id', help='the id of the oauth user')
-    parser.add_argument('client_secret', help='oauth secret')
-    parser.add_argument('file_path', help='path of the file to upload')
+def _block_on_import(auth, file_id):
+    """
+    Blocks while polling on the file import. If the file isn't done importing in 3 minutes this times out and exits.
 
-    return parser.parse_args()
+    :param Authorization auth: for utilizing a bearer token
+    :param file_id: the id of the file being imported
+    :return: nothing but prints and exits on an error
+    """
+    for _ in xrange(90):
+        time.sleep(2)  # wait 2 seconds on every iteration
+
+        req = Request(FILE_POLL_PATH % file_id)
+        req.add_header('Authorization', auth.bearer_token())
+
+        res = json.loads(_make_request(req))
+        f = File(res['body']['id'], res['body']['status'])
+        if f.status.upper() == 'IMPORTING':  # continue to next iteration
+            continue
+
+        if f.status.upper() == 'IMPORTED':  # we are done here, nothing else to do
+            return
+
+        # any other case is a problem
+        print 'error importing file: %s' % res
+        sys.exit(1)
+
+    print 'timed out importing file'
+    sys.exit(1)
 
 
 def encode_multipart_formdata(fields, files):
@@ -170,7 +202,30 @@ def encode_multipart_formdata(fields, files):
 
 
 def get_content_type(filename):
+    """
+    Uses mimetype's guess functionality to take a shot at guessing the provided filename's mimetype.
+
+    :param str filename: name of the file, should include extension
+    :return: the guessed value or `application/octet-stream` by default
+    :rtype: str
+    """
     return mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+
+
+def _parse_args():
+    """
+    Parses args from the command line and returns an args object.
+
+    :return: parsed args
+    :rtype: Args
+    """
+    parser = argparse.ArgumentParser(description='Upload a file to Wdata.')
+    parser.add_argument('table_id', help='id of the table to upload a file to')
+    parser.add_argument('client_id', help='the id of the oauth user')
+    parser.add_argument('client_secret', help='oauth secret')
+    parser.add_argument('file_path', help='path of the file to upload, file should include extension and should be CSV')
+
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
