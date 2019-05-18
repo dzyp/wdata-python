@@ -20,7 +20,7 @@ Download the python file in this repo and run locally in a terminal.
 
 Usage:
 ```console
-python wdata_import.py <table_id> <client_id> <client_secret> <file_path>
+python wdata_import.py table_id client_id client_secret file_path
 ```
 
 `file_path` goes last which is useful for tools like `xargs`.
