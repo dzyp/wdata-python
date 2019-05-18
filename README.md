@@ -23,4 +23,4 @@ Usage:
 python wdata_import.py <table_id> <client_id> <client_secret> <file_path>
 ```
 
-`file_path` goes last which is useful for tools like `xarg`.
+`file_path` goes last which is useful for tools like `xargs`.
